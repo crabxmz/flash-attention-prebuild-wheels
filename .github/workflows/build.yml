@@ -132,7 +132,7 @@ jobs:
 
       # Save wheel as artifact (available for download in GitHub Actions)
       - name: Upload wheel as artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: flash-attn-${{ steps.set-vars.outputs.flash_attn_version }}-py${{ steps.set-vars.outputs.python_version }}-torch${{ steps.set-vars.outputs.torch_version }}-cuda${{ steps.set-vars.outputs.cuda_version }}
           path: flash-attention/dist/${{ env.wheel_name }}
