@@ -25,7 +25,7 @@ jobs:
           body: |
             | Flash-Attention | Python | PyTorch | CUDA |
             |-----------------|--------|---------|------|
-            | "2.4.3", 2.5.9, 2.6.3, 2.7.4.post1 | 3.10, 3.11, 3.12 | 2.2.2, 2.3.1, 2.4.1, 2.5.1, 2.6.0 | 12.4.1, 12.6.3 |
+            | "2.4.3", 2.5.9, 2.6.3, 2.7.4.post1 | 3.9 | 2.2.0 | 11.8.0 |
 
   build_wheels:
     name: Build wheels and Upload
@@ -35,23 +35,9 @@ jobs:
       fail-fast: false
       matrix:
         flash-attn-version: ["2.4.3", "2.5.9", "2.6.3", "2.7.4.post1"]
-        python-version: ["3.10", "3.11", "3.12"]
-        torch-version:
-          ["2.2.2", "2.3.1", "2.4.1", "2.5.1", "2.6.0"]
-        cuda-version: ["12.4.1", "12.6.3"]
-        exclude:
-          # torch < 2.2 does not support Python 3.12
-          - python-version: "3.12"
-            torch-version: "2.0.1"
-          - python-version: "3.12"
-            torch-version: "2.1.2"
-          # torch 2.0.1 does not support CUDA 12.x
-          - torch-version: "2.0.1"
-            cuda-version: "12.1.1"
-          - torch-version: "2.0.1"
-            cuda-version: "12.4.1"
-          - torch-version: "2.0.1"
-            cuda-version: "12.6.3"
+        python-version: ["3.9"]
+        torch-version: ["2.2.0"]
+        cuda-version: ["11.8.0"]
 
     steps:
       - uses: actions/checkout@v4
@@ -89,22 +75,7 @@ jobs:
         run: |
           pip install -U pip
           pip install wheel setuptools packaging
-          export TORCH_CUDA_VERSION=$(python -c "from os import environ as env; \
-              support_cuda_versions = { \
-                  '2.0': [117, 118], \
-                  '2.1': [118, 121], \
-                  '2.2': [118, 121], \
-                  '2.3': [118, 121], \
-                  '2.4': [118, 121, 124], \
-                  '2.5': [118, 121, 124], \
-                  '2.6': [118, 124, 126], \
-              }; \
-              target_cuda_versions = support_cuda_versions[env['MATRIX_TORCH_VERSION']]; \
-              cuda_version = int(env['MATRIX_CUDA_VERSION']); \
-              closest_version = min(target_cuda_versions, key=lambda x: abs(x - cuda_version)); \
-              print(closest_version) \
-          ")
-          pip install --no-cache-dir torch==${{ matrix.torch-version }} --index-url https://download.pytorch.org/whl/cu${TORCH_CUDA_VERSION}
+          pip install --no-cache-dir torch==${{ matrix.torch-version }} --index-url https://download.pytorch.org/whl/cu118
           nvcc --version
           python -V
           python -c "import torch; print('PyTorch:', torch.__version__)"
@@ -147,6 +118,14 @@ jobs:
           pip install flash-attention/dist/${{ env.wheel_name }}
           python -c "import flash_attn; print(flash_attn.__version__)"
 
+      # Save wheel as artifact (available even if release fails)
+      - name: Upload wheel as artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ matrix.flash-attn-version }}-py${{ matrix.python-version }}-torch${{ matrix.torch-version }}-cuda${{ matrix.cuda-version }}
+          path: flash-attention/dist/${{ env.wheel_name }}
+          retention-days: 7
+
       - name: Get the tag version
         id: extract_branch
         run: echo "branch=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
@@ -158,6 +137,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{ steps.extract_branch.outputs.branch }}
+          fail_on_error: false
 
       - name: Upload Release Asset
         uses: actions/upload-release-asset@v1
@@ -168,3 +148,4 @@ jobs:
           asset_path: flash-attention/dist/${{ env.wheel_name }}
           asset_name: ${{ env.wheel_name }}
           asset_content_type: application/*
+        continue-on-error: true
