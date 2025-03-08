@@ -1,44 +1,41 @@
-name: Build wheels and upload to GitHub Releases
+name: Build wheels for Flash Attention
 
 on:
+  workflow_dispatch:  # This allows manual triggering
+    inputs:
+      flash_attn_version:
+        description: 'Flash Attention version'
+        required: true
+        default: '2.7.4.post1'
+        type: choice
+        options:
+          - '2.4.3'
+          - '2.5.9'
+          - '2.6.3'
+          - '2.7.4.post1'
+      python_version:
+        description: 'Python version'
+        required: true
+        default: '3.9'
+        type: string
+      torch_version:
+        description: 'PyTorch version'
+        required: true
+        default: '2.2.0'
+        type: string
+      cuda_version:
+        description: 'CUDA version'
+        required: true
+        default: '11.8.0'
+        type: string
   create:
     tags:
-      - "v*"
+      - "v*"  # Keeping the original trigger as well
 
 jobs:
-  create_releases:
-    name: Create Releases
-    runs-on: ubuntu-latest
-    steps:
-      - name: Get the tag version
-        id: extract_branch
-        run: echo "branch=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-        shell: bash
-      - name: Create Release
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ steps.extract_branch.outputs.branch }}
-          release_name: ${{ steps.extract_branch.outputs.branch }}
-          body: |
-            | Flash-Attention | Python | PyTorch | CUDA |
-            |-----------------|--------|---------|------|
-            | "2.4.3", 2.5.9, 2.6.3, 2.7.4.post1 | 3.9 | 2.2.0 | 11.8.0 |
-
   build_wheels:
-    name: Build wheels and Upload
-    needs: create_releases
+    name: Build wheels
     runs-on: ubuntu-22.04
-    strategy:
-      fail-fast: false
-      matrix:
-        flash-attn-version: ["2.4.3", "2.5.9", "2.6.3", "2.7.4.post1"]
-        python-version: ["3.9"]
-        torch-version: ["2.2.0"]
-        cuda-version: ["11.8.0"]
-
     steps:
       - uses: actions/checkout@v4
       - name: Maximize build space
@@ -55,27 +52,42 @@ jobs:
         with:
           swap-size-gb: 48
 
+      - name: Set variables based on trigger type
+        id: set-vars
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "flash_attn_version=${{ github.event.inputs.flash_attn_version }}" >> $GITHUB_OUTPUT
+            echo "python_version=${{ github.event.inputs.python_version }}" >> $GITHUB_OUTPUT
+            echo "torch_version=${{ github.event.inputs.torch_version }}" >> $GITHUB_OUTPUT
+            echo "cuda_version=${{ github.event.inputs.cuda_version }}" >> $GITHUB_OUTPUT
+          else
+            echo "flash_attn_version=2.7.4.post1" >> $GITHUB_OUTPUT
+            echo "python_version=3.9" >> $GITHUB_OUTPUT
+            echo "torch_version=2.2.0" >> $GITHUB_OUTPUT
+            echo "cuda_version=11.8.0" >> $GITHUB_OUTPUT
+          fi
+
       - uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: ${{ steps.set-vars.outputs.python_version }}
       - uses: Jimver/cuda-toolkit@master
         with:
-          cuda: ${{ matrix.cuda-version }}
+          cuda: ${{ steps.set-vars.outputs.cuda_version }}
           linux-local-args: '["--toolkit"]'
           method: "network"
       - run: sudo apt install -y ninja-build
 
       - name: Set CUDA and PyTorch versions
         run: |
-          echo "MATRIX_CUDA_VERSION=$(echo ${{ matrix.cuda-version }} | awk -F \. {'print $1 $2'})" >> $GITHUB_ENV
-          echo "MATRIX_TORCH_VERSION=$(echo ${{ matrix.torch-version }} | awk -F \. {'print $1 "." $2'})" >> $GITHUB_ENV
-          echo "CACHE_KEY=cuda-ext-${{ matrix.flash-attn-version }}-py${{ matrix.python-version }}-torch${{ matrix.torch-version }}-cuda${{ matrix.cuda-version }}" >> $GITHUB_ENV
+          echo "MATRIX_CUDA_VERSION=$(echo ${{ steps.set-vars.outputs.cuda_version }} | awk -F \. {'print $1 $2'})" >> $GITHUB_ENV
+          echo "MATRIX_TORCH_VERSION=$(echo ${{ steps.set-vars.outputs.torch_version }} | awk -F \. {'print $1 "." $2'})" >> $GITHUB_ENV
+          echo "CACHE_KEY=cuda-ext-${{ steps.set-vars.outputs.flash_attn_version }}-py${{ steps.set-vars.outputs.python_version }}-torch${{ steps.set-vars.outputs.torch_version }}-cuda${{ steps.set-vars.outputs.cuda_version }}" >> $GITHUB_ENV
 
-      - name: Install PyTorch ${{ matrix.torch-version }}+cu${{ matrix.cuda-version }}
+      - name: Install PyTorch ${{ steps.set-vars.outputs.torch_version }}+cu${{ steps.set-vars.outputs.cuda_version }}
         run: |
           pip install -U pip
           pip install wheel setuptools packaging
-          pip install --no-cache-dir torch==${{ matrix.torch-version }} --index-url https://download.pytorch.org/whl/cu118
+          pip install --no-cache-dir torch==${{ steps.set-vars.outputs.torch_version }} --index-url https://download.pytorch.org/whl/cu118
           nvcc --version
           python -V
           python -c "import torch; print('PyTorch:', torch.__version__)"
@@ -86,7 +98,7 @@ jobs:
         run: |
           git clone https://github.com/Dao-AILab/flash-attention.git
           cd flash-attention
-          git checkout v${{ matrix.flash-attn-version }}
+          git checkout v${{ steps.set-vars.outputs.flash_attn_version }}
 
       # Add cache steps for CUDA extension build
       - name: Cache CUDA extension build
@@ -109,7 +121,7 @@ jobs:
           cd flash-attention
           FLASH_ATTENTION_FORCE_BUILD="TRUE" python setup.py bdist_wheel --dist-dir=dist
           base_wheel_name=$(basename $(ls dist/*.whl | head -n 1))
-          wheel_name=$(echo $base_wheel_name | sed "s/${{ matrix.flash-attn-version }}/${{ matrix.flash-attn-version }}+cu${{ env.MATRIX_CUDA_VERSION }}torch${{ env.MATRIX_TORCH_VERSION }}/")
+          wheel_name=$(echo $base_wheel_name | sed "s/${{ steps.set-vars.outputs.flash_attn_version }}/${{ steps.set-vars.outputs.flash_attn_version }}+cu${{ env.MATRIX_CUDA_VERSION }}torch${{ env.MATRIX_TORCH_VERSION }}/")
           mv dist/$base_wheel_name dist/$wheel_name
           echo "wheel_name=$wheel_name" >> $GITHUB_ENV
 
@@ -118,34 +130,10 @@ jobs:
           pip install flash-attention/dist/${{ env.wheel_name }}
           python -c "import flash_attn; print(flash_attn.__version__)"
 
-      # Save wheel as artifact (available even if release fails)
+      # Save wheel as artifact (available for download in GitHub Actions)
       - name: Upload wheel as artifact
         uses: actions/upload-artifact@v3
         with:
-          name: ${{ matrix.flash-attn-version }}-py${{ matrix.python-version }}-torch${{ matrix.torch-version }}-cuda${{ matrix.cuda-version }}
+          name: flash-attn-${{ steps.set-vars.outputs.flash_attn_version }}-py${{ steps.set-vars.outputs.python_version }}-torch${{ steps.set-vars.outputs.torch_version }}-cuda${{ steps.set-vars.outputs.cuda_version }}
           path: flash-attention/dist/${{ env.wheel_name }}
           retention-days: 7
-
-      - name: Get the tag version
-        id: extract_branch
-        run: echo "branch=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-
-      - name: Get Release with Tag
-        id: get_release
-        uses: joutvhu/get-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ steps.extract_branch.outputs.branch }}
-          fail_on_error: false
-
-      - name: Upload Release Asset
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.get_release.outputs.upload_url }}
-          asset_path: flash-attention/dist/${{ env.wheel_name }}
-          asset_name: ${{ env.wheel_name }}
-          asset_content_type: application/*
-        continue-on-error: true
